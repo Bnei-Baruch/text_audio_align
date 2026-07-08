@@ -54,7 +54,8 @@ just a change in how unmatched segments are handled downstream.
 
 Run on a machine with a GPU (this downloads and runs both a Whisper model
 and Meta's MMS alignment model — do not expect this to run practically on
-CPU for a 5-60 min file).
+CPU for a 5-60 min file). Requires `ffmpeg` installed system-wide (same
+requirement as the sibling `whisper_trainer` project).
 
 Use a **dedicated conda env**, separate from `whisper_trainer`'s training
 env: that env pins `torch`/`torchaudio` specifically for FP8/TransformerEngine
@@ -148,6 +149,16 @@ are specific to your access to this DB.
 file's `uid` string column (not its numeric `id`) — matches the `uid`
 convention `trlAi/src/prepare_data.py` uses for its own kabbalahmedia URL.
 If downloads 404, this is the first thing to check.
+
+**Downloaded audio is re-encoded to WAV via ffmpeg immediately**, not
+saved as the raw downloaded bytes — confirmed live that files served from
+this URL despite the `.mp3` extension are sometimes actually ISO-BMFF/MP4
+containers (AAC) with the `moov` atom at the end of the file. Readers that
+pipe bytes in via stdin instead of opening the path directly (e.g.
+`transformers`' `ffmpeg_read`, used by `rough_transcribe.py`) can't seek to
+find it and fail with a "malformed" error even though the file is valid.
+So `fetch_source_audio.py` always writes `data/<cu_uid>/<file_uid>.wav`
+(16kHz mono), never `.mp3` — every downstream stage just opens a plain WAV.
 
 `fetch_data/config.json`'s `"limit"` caps how many content units to fetch
 (`null` = no limit, fetch all matching units). `--limit N` on the command

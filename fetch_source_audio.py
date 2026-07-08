@@ -60,7 +60,7 @@ def run(cfg: dict, limit: int | None, offset: int) -> None:
 
             for row in rows:
                 unit_dir = os.path.join(data_dir, row["cu_uid"])
-                audio_path = os.path.join(unit_dir, f"{row['file_uid']}.mp3")
+                audio_path = os.path.join(unit_dir, f"{row['file_uid']}.wav")
                 if os.path.exists(audio_path):
                     logger.info(f"[{row['cu_uid']}] audio already present, skipping download")
                 else:
