@@ -56,9 +56,28 @@ Run on a machine with a GPU (this downloads and runs both a Whisper model
 and Meta's MMS alignment model — do not expect this to run practically on
 CPU for a 5-60 min file).
 
+Use a **dedicated conda env**, separate from `whisper_trainer`'s training
+env: that env pins `torch`/`torchaudio` specifically for FP8/TransformerEngine
+training on Blackwell, and this project needs different, newer packages
+(`uroman`, `psycopg2-binary`) with no reason to share or disturb that pin.
+
+```bash
+conda env create -f environment.yml
+conda activate text_audio_align
+```
+
+Or without conda:
+
 ```bash
 pip install -r requirements.txt
 ```
+
+`torch`/`torchaudio` are installed unpinned (same approach as
+`whisper_trainer`'s own `requirements.txt`) so pip resolves a build that
+matches the server's actual CUDA setup — if the GPU is a very recent
+architecture (e.g. Blackwell/RTX 5090), verify the resolved wheel actually
+supports it (`python -c "import torch; print(torch.cuda.get_device_name(0))"`
+should not error) before trusting anything downstream.
 
 **Before relying on this for real data**, verify `ctc_align.py` against your
 installed `torchaudio` version — its `torchaudio.pipelines.MMS_FA` API
