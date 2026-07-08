@@ -1,0 +1,8 @@
+{
+  "content_unit_type": "SOURCE",
+  "file_type": "audio",
+  "preferred_text_language": "he",
+  "batch_size": 100,
+  "data_dir": "data",
+  "limit": null
+}

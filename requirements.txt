@@ -1,0 +1,6 @@
+torch
+torchaudio
+transformers
+uroman
+psycopg2-binary
+requests
