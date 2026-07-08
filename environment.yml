@@ -1,4 +1,4 @@
-name: text_audio_align
+name: align
 channels:
   - pytorch
   - conda-forge

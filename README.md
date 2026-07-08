@@ -63,7 +63,7 @@ training on Blackwell, and this project needs different, newer packages
 
 ```bash
 conda env create -f environment.yml
-conda activate text_audio_align
+conda activate align
 ```
 
 Or without conda:
