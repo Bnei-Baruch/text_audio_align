@@ -60,13 +60,14 @@ def run(cfg: dict, limit: int | None, offset: int) -> None:
 
             for row in rows:
                 unit_dir = os.path.join(data_dir, row["cu_uid"])
+                if os.path.isdir(unit_dir):
+                    logger.info(f"[{row['cu_uid']}] output dir already exists, skipping")
+                    continue
+
                 audio_path = os.path.join(unit_dir, f"{row['file_uid']}.wav")
-                if os.path.exists(audio_path):
-                    logger.info(f"[{row['cu_uid']}] audio already present, skipping download")
-                else:
-                    logger.info(f"[{row['cu_uid']}] downloading audio {row['file_uid']}")
-                    if not download_audio(row["file_uid"], audio_path):
-                        continue
+                logger.info(f"[{row['cu_uid']}] downloading audio {row['file_uid']}")
+                if not download_audio(row["file_uid"], audio_path):
+                    continue
 
                 text_files = fetch_text_files_for_unit(conn, row["cu_id"])
                 if not text_files:
@@ -77,8 +78,6 @@ def run(cfg: dict, limit: int | None, offset: int) -> None:
                     (t for t in text_files if t["language"] == preferred_lang), text_files[0]
                 )
                 text_path = os.path.join(unit_dir, "reference_text.txt")
-                if os.path.exists(text_path):
-                    continue
                 text = fetch_text(chosen["uid"])
                 if text:
                     os.makedirs(unit_dir, exist_ok=True)

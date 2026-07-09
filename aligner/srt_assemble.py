@@ -7,6 +7,7 @@ exclude them, matching the project's general QC pattern of flag-then-decide
 rather than flag-and-guess.
 """
 import json
+import os
 
 
 def _format_ts(seconds: float) -> str:
@@ -47,6 +48,7 @@ def words_to_cues(
 
 
 def write_srt(cues: list[dict], path: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for idx, cue in enumerate(cues, 1):
             f.write(
@@ -55,5 +57,6 @@ def write_srt(cues: list[dict], path: str) -> None:
 
 
 def write_qc_report(flagged: list[dict], path: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(flagged, f, ensure_ascii=False, indent=2)

@@ -174,29 +174,33 @@ python fetch_source_audio.py fetch_data/config.json --limit 10
 
 ## Usage
 
-1. Either run step 0 above, or put your own audio file and reference text
-   (`.txt`, plain UTF-8) directly under `data/`.
-2. Edit `align_config.json` — at minimum `audio_path` and
-   `reference_text_path`.
+1. Either run step 0 above, or manually create one subdirectory per
+   recording directly under `data/`, each containing exactly one audio
+   file (`.wav`) and a `reference_text.txt` (plain UTF-8).
+2. Edit `align_config.json` if needed — `data_dir` (default `data`) and
+   `output_dir` (default `output`) control where units are read from and
+   results are written to.
 3. Run:
 
 ```bash
 python run_align.py align_config.json
 ```
 
-Output: an SRT file at `output_srt_path`, and a JSON QC report at
-`output_qc_path` listing every subtitle cue that contains a word below
-`min_ctc_score` (default 0.5) — review these before trusting the file
-downstream.
+`run_align.py` batches over every subdirectory of `data_dir` (skipping any
+that don't contain exactly one `.wav` and a `reference_text.txt`), running
+the pipeline for each and writing to `<output_dir>/<unit_id>/`:
+`output.srt`, `output_qc.json` (every subtitle cue containing a word below
+`min_ctc_score`, default 0.5 — review these before trusting the file
+downstream), plus copies of the source audio and reference text so each
+unit's output directory is self-contained for review.
 
 ## Config reference (`align_config.json`)
 
 | Key | Default | Meaning |
 |---|---|---|
-| `audio_path` | — | Path to the long recording. |
-| `reference_text_path` | — | Path to the plain-text known-correct script. |
-| `output_srt_path` | `output/output.srt` | Where to write the resulting SRT. |
-| `output_qc_path` | `output/output_qc.json` | Where to write flagged low-confidence cues. |
+| `data_dir` | `data` | Directory holding one subdirectory per content unit (see Usage). |
+| `output_dir` | `output` | Directory results are written to, one subdirectory per unit. |
+| `unit_ids` | `null` | List of unit uids to restrict the run to. `null` processes every subdirectory of `data_dir`. |
 | `whisper_model` | `openai/whisper-large-v3` | Model for the rough stage-1 pass. Any Hebrew-capable Whisper checkpoint works, including a fine-tuned one. |
 | `language` | `he` | Passed to Whisper's generation config. |
 | `mms_lang_code` | `heb` | ISO 639-3 code passed to `uroman` / MMS for the CTC stage. |

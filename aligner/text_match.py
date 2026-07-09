@@ -11,8 +11,49 @@ left unmatched rather than forced -- today this means "reject/flag for
 review" (pure-reading assumption); the same field is what a future
 insertion-tolerant mode would use to detect and skip conversational asides
 without corrupting the cursor position.
+
+Both the reference text and each rough hypothesis are normalized before
+word-level comparison (see _normalize_words). Confirmed live against a
+real SOURCE letter: without this, match_ratio was 0 for every single
+segment despite the ASR hypothesis and reference text being genuinely
+very close in content -- SequenceMatcher compares whole word tokens for
+exact equality, so a single stray character (gershayim/quote marks around
+honorific abbreviations, niqqud, punctuation) makes an otherwise-identical
+word count as a total mismatch. The archival text convention of
+"old_spelling [modern_spelling]" (a bracketed alternate reading) is
+resolved to just the bracketed form, which is what's actually read aloud
+-- confirmed by comparing a real hypothesis/reference pair live.
 """
+import re
 from difflib import SequenceMatcher
+
+_NIQQUD_RE = re.compile(r"[֑-ׇ]")
+_QUOTE_RE = re.compile(r"[\"'׳״‘’“”]")
+_PUNCT_RE = re.compile(r"[,.;:!?()]")
+_BRACKET_GLOSS_RE = re.compile(r"\S+\s*\[([^\]]+)\]")
+
+
+def _expand_bracket_glosses(text: str) -> str:
+    """Replace "old_spelling [modern_spelling]" with just "modern_spelling"."""
+    return _BRACKET_GLOSS_RE.sub(r"\1", text)
+
+
+def _normalize_word(word: str) -> str:
+    word = _NIQQUD_RE.sub("", word)
+    word = _QUOTE_RE.sub("", word)
+    word = _PUNCT_RE.sub("", word)
+    return word
+
+
+def normalize_words(text: str) -> list[str]:
+    """Text -> list of comparison/output-ready words: bracket glosses
+    expanded, niqqud/quotes/basic punctuation stripped, empty tokens
+    dropped. Used for both the match comparison and (for the reference
+    text) as the source of matched_text handed to stage 3 -- a clean,
+    quote-free string is exactly what CTC/uroman romanization needs
+    anyway (a stray `"` character has previously crashed that stage)."""
+    text = _expand_bracket_glosses(text)
+    return [w for w in (_normalize_word(w) for w in text.split()) if w]
 
 
 def match_segment_to_reference(
@@ -24,10 +65,13 @@ def match_segment_to_reference(
 ) -> tuple[int, int, float] | None:
     """Find where `hyp_text` best matches within ref_words[cursor : cursor+lookahead_words].
 
+    `ref_words` must already be normalized (see normalize_words) -- this
+    function normalizes `hyp_text` the same way before comparing.
+
     Returns (matched_start, matched_end, match_ratio) as indices into
     ref_words, or None if no sufficiently good match was found.
     """
-    hyp_words = hyp_text.split()
+    hyp_words = normalize_words(hyp_text)
     if not hyp_words:
         return None
 
@@ -41,7 +85,14 @@ def match_segment_to_reference(
     if not blocks:
         return None
 
-    match_ratio = sm.ratio()
+    # NOT sm.ratio(): that's 2*M / (len(window) + len(hyp_words)), which
+    # is diluted by the search window's length -- with lookahead_words=200
+    # and a ~30-word hypothesis, even a near-perfect match scores ~0.2
+    # (confirmed live). What we actually want is "what fraction of the
+    # hypothesis did we find somewhere in the window", independent of how
+    # large the window itself is.
+    matched_word_count = sum(b.size for b in blocks)
+    match_ratio = matched_word_count / len(hyp_words)
     if match_ratio < min_match_ratio:
         return None
 
@@ -64,7 +115,7 @@ def align_segments_to_text(
     advances on a successful match, so an unmatched segment does not throw
     off the search window for the next one.
     """
-    ref_words = reference_text.split()
+    ref_words = normalize_words(reference_text)
     cursor = 0
     matched = []
     for seg in segments:

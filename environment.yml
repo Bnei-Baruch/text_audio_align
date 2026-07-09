@@ -13,3 +13,4 @@ dependencies:
       - uroman
       - psycopg2-binary
       - requests
+      - soundfile

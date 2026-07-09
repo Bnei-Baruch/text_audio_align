@@ -10,8 +10,8 @@ Unmatched segments (stage 2) are excluded from alignment rather than forced
 review it"; the unmatched count is reported so that decision is visible
 rather than silent.
 """
+import soundfile as sf
 import torch
-import torchaudio
 
 from .ctc_align import align_window
 from .rough_transcribe import rough_transcribe
@@ -56,7 +56,18 @@ def run_pipeline(cfg: dict) -> dict:
     )
 
     print("[3/4] CTC forced alignment per matched window")
-    waveform, sr = torchaudio.load(audio_path)
+    try:
+        data, sr = sf.read(audio_path, dtype="float32", always_2d=True)  # [N, channels]
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not read audio_path={audio_path!r} as WAV/FLAC/OGG via soundfile "
+            f"({e}). This pipeline expects a plain, directly-readable audio file, not a "
+            "raw compressed download -- e.g. the WAV files fetch_data/download.py already "
+            "produces via ffmpeg. If you supplied your own file per the README's manual "
+            '"Usage" step, convert it first:\n'
+            f"  ffmpeg -y -i {audio_path!r} -ac 1 -ar 16000 <path-to-your-file>.wav"
+        ) from e
+    waveform = torch.from_numpy(data.T.copy())  # [channels, N], matches torchaudio.load's layout
     if waveform.size(0) > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
 

@@ -1,9 +1,8 @@
 {
-  "audio_path": "data/oMq3uU8L/QfvM637J.wav",
-  "reference_text_path": "data/oMq3uU8L/reference_text.txt",
-  "output_srt_path": "output/oMq3uU8L.srt",
-  "output_qc_path": "output/oMq3uU8L_qc.json",
-  "whisper_model": "openai/whisper-large-v3",
+  "data_dir": "data",
+  "output_dir": "output",
+  "unit_ids": null,
+  "whisper_model": "../whisper_trainer/output/whisper-prev",
   "language": "he",
   "mms_lang_code": "heb",
   "chunk_length_s": 30,
