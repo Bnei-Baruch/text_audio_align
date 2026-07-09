@@ -1,13 +1,16 @@
 {
   "data_dir": "data",
   "output_dir": "output",
-  "unit_ids": null,
+  "unit_ids": ["HnW0CM9V"],
   "whisper_model": "../whisper_trainer/output/whisper-prev",
   "language": "he",
   "mms_lang_code": "heb",
   "chunk_length_s": 30,
+  "min_silence_duration_ms": 100,
+  "max_speech_duration_s": null,
   "lookahead_words": 200,
   "min_match_ratio": 0.4,
   "min_ctc_score": 0.5,
-  "words_per_cue": 12
+  "words_per_cue": 12,
+  "debug": true
 }

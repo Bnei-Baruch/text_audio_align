@@ -33,6 +33,9 @@ inside such an oversized chunk is silently dropped from the *rough*
 transcript. This only weakens stage 2's search key for that one chunk; it
 does not affect stage 3's precision elsewhere.
 """
+import json
+import os
+
 import soundfile as sf
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
@@ -58,8 +61,17 @@ def rough_transcribe(
     language: str = "he",
     chunk_length_s: int = 30,
     device: str = "cuda",
+    min_silence_duration_ms: int = 100,
+    max_speech_duration_s: float | None = None,
+    debug_dir: str | None = None,
 ) -> list[dict]:
-    """Returns a list of {"start": float, "end": float, "text": str} segments."""
+    """Returns a list of {"start": float, "end": float, "text": str} segments.
+
+    If debug_dir is given, writes each VAD-derived chunk as its own WAV file
+    there, plus vad_chunks.json listing index/start/end/duration/text per
+    chunk -- e.g. to inspect an oversized chunk (see vad_chunk.py's
+    docstring) that produced a bad stage-3 CTC window.
+    """
     model, processor = _get_model_and_processor(model_name, device)
 
     data, sr = sf.read(audio_path, dtype="float32", always_2d=True)  # [N, channels]
@@ -72,11 +84,21 @@ def rough_transcribe(
         )
 
     waveform = torch.from_numpy(array.copy())
-    chunk_bounds = get_speech_chunks(waveform, sr, target_s=chunk_length_s)
+    chunk_bounds = get_speech_chunks(
+        waveform,
+        sr,
+        target_s=chunk_length_s,
+        min_silence_duration_ms=min_silence_duration_ms,
+        max_speech_duration_s=max_speech_duration_s,
+    )
+
+    if debug_dir:
+        os.makedirs(debug_dir, exist_ok=True)
+    debug_entries = []
 
     segments = []
     with torch.inference_mode():
-        for start_sample, end_sample in chunk_bounds:
+        for i, (start_sample, end_sample) in enumerate(chunk_bounds):
             chunk_array = array[start_sample:end_sample]
 
             inputs = processor(chunk_array, sampling_rate=sr, return_tensors="pt")
@@ -90,9 +112,29 @@ def rough_transcribe(
                 num_beams=1,
             )
             text = processor.batch_decode(gen_ids, skip_special_tokens=True)[0].strip()
+
+            if debug_dir:
+                wav_name = f"chunk_{i:03d}.wav"
+                sf.write(os.path.join(debug_dir, wav_name), chunk_array, sr)
+                debug_entries.append(
+                    {
+                        "index": i,
+                        "start": start_sample / sr,
+                        "end": end_sample / sr,
+                        "duration": (end_sample - start_sample) / sr,
+                        "text": text,
+                        "wav": wav_name,
+                    }
+                )
+
             if not text:
                 continue
             segments.append(
                 {"start": start_sample / sr, "end": end_sample / sr, "text": text}
             )
+
+    if debug_dir:
+        with open(os.path.join(debug_dir, "vad_chunks.json"), "w", encoding="utf-8") as f:
+            json.dump(debug_entries, f, ensure_ascii=False, indent=2)
+
     return segments

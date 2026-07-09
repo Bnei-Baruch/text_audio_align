@@ -10,6 +10,8 @@ Unmatched segments (stage 2) are excluded from alignment rather than forced
 review it"; the unmatched count is reported so that decision is visible
 rather than silent.
 """
+import os
+
 import soundfile as sf
 import torch
 
@@ -28,11 +30,14 @@ def run_pipeline(cfg: dict) -> dict:
     language = cfg.get("language", "he")
     mms_lang_code = cfg.get("mms_lang_code", "heb")
     chunk_length_s = cfg.get("chunk_length_s", 30)
+    min_silence_duration_ms = cfg.get("min_silence_duration_ms", 100)
+    max_speech_duration_s = cfg.get("max_speech_duration_s")
     lookahead_words = cfg.get("lookahead_words", 200)
     min_match_ratio = cfg.get("min_match_ratio", 0.4)
     min_ctc_score = cfg.get("min_ctc_score", 0.5)
     words_per_cue = cfg.get("words_per_cue", 12)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    debug_dir = os.path.join(os.path.dirname(output_srt_path), "debug") if cfg.get("debug", False) else None
 
     with open(text_path, "r", encoding="utf-8") as f:
         reference_text = f.read()
@@ -44,8 +49,13 @@ def run_pipeline(cfg: dict) -> dict:
         language=language,
         chunk_length_s=chunk_length_s,
         device=device,
+        min_silence_duration_ms=min_silence_duration_ms,
+        max_speech_duration_s=max_speech_duration_s,
+        debug_dir=debug_dir,
     )
     print(f"  -> {len(segments)} rough segments")
+    if debug_dir:
+        print(f"  -> debug: VAD chunks + log saved to {debug_dir}")
 
     print("[2/4] Matching segments to reference text")
     matched = align_segments_to_text(segments, reference_text, lookahead_words, min_match_ratio)

@@ -205,10 +205,13 @@ unit's output directory is self-contained for review.
 | `language` | `he` | Passed to Whisper's generation config. |
 | `mms_lang_code` | `heb` | ISO 639-3 code passed to `uroman` / MMS for the CTC stage. |
 | `chunk_length_s` | `30` | Rough-pass window size (also the CTC stage's max window size). |
+| `min_silence_duration_ms` | `100` | How long a quiet stretch must last for VAD to treat it as a real pause to cut on. Lower = willing to cut on shorter pauses; too low risks cutting mid-word. |
+| `max_speech_duration_s` | `null` | Hard cap on a single VAD speech segment; `null` falls back to `chunk_length_s`. Prevents an unbroken speech run with no detected pause from becoming one oversized chunk that overwhelms the stage-3 CTC aligner. |
 | `lookahead_words` | `200` | How far ahead of the cursor to search the reference text per segment. |
 | `min_match_ratio` | `0.4` | Below this text-match ratio, a segment is left unmatched (excluded from alignment). |
 | `min_ctc_score` | `0.5` | Below this CTC confidence, a cue is flagged in the QC report. |
 | `words_per_cue` | `12` | How many aligned words to group into one SRT cue. |
+| `debug` | `false` | If `true`, saves each VAD-derived stage-1 chunk as its own WAV under `<output_dir>/<unit_id>/debug/`, plus `vad_chunks.json` there logging index/start/end/duration/text per chunk -- useful for spotting an oversized chunk (see `vad_chunk.py`) that produced a bad stage-3 CTC window. |
 
 ## Layout
 

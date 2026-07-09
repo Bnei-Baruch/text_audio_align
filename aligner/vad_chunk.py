@@ -33,16 +33,32 @@ def _load_vad():
 
 
 def get_speech_chunks(
-    waveform: torch.Tensor, sr: int, target_s: float = 30.0
+    waveform: torch.Tensor,
+    sr: int,
+    target_s: float = 30.0,
+    min_silence_duration_ms: int = 100,
+    max_speech_duration_s: float | None = None,
 ) -> list[tuple[int, int]]:
     """Returns [(start_sample, end_sample), ...] chunk boundaries.
 
     Each boundary falls in a silence gap between two VAD-detected speech
-    segments -- never mid-word. A single uninterrupted speech run longer
-    than target_s (no detected pause) becomes its own oversized chunk
-    rather than being force-cut mid-speech; this is rare in practice
-    (natural reading has breathing pauses) and preferred over
-    reintroducing the mid-word-cut problem this function exists to avoid.
+    segments -- never mid-word.
+
+    min_silence_duration_ms: how long a quiet stretch must last for Silero
+    to treat it as a real gap between speech segments, rather than bridging
+    over it as part of one continuous speech run. Lower values make VAD
+    willing to cut on shorter pauses; too low risks false positives on
+    brief in-word closures (stop consonants, breaths), reintroducing the
+    mid-word-cut problem this function exists to avoid.
+
+    max_speech_duration_s: hard cap on a single Silero-detected speech
+    segment; defaults to target_s. Silero's own default is unbounded, so a
+    long uninterrupted speech run with no detected pause becomes one
+    oversized chunk -- rare in practice, but stage 3's CTC aligner is not
+    designed to handle a window that long (see ctc_align.py). When a
+    segment would exceed this cap, Silero picks the least-speech-like
+    point within it to split (via min_silence_at_max_speech), not an
+    arbitrary sample boundary.
 
     Falls back to a single (0, len) chunk if VAD finds no speech at all
     (e.g. a music-only intro with no spoken content).
@@ -50,8 +66,16 @@ def get_speech_chunks(
     model, get_speech_timestamps = _load_vad()
     if sr != 16000:
         raise ValueError(f"Silero VAD expects 16kHz audio, got {sr}Hz")
+    if max_speech_duration_s is None:
+        max_speech_duration_s = target_s
 
-    speech = get_speech_timestamps(waveform, model, sampling_rate=sr)
+    speech = get_speech_timestamps(
+        waveform,
+        model,
+        sampling_rate=sr,
+        min_silence_duration_ms=min_silence_duration_ms,
+        max_speech_duration_s=max_speech_duration_s,
+    )
     if not speech:
         return [(0, waveform.shape[-1])]
 
