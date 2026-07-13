@@ -38,11 +38,19 @@ def _expand_bracket_glosses(text: str) -> str:
     return _BRACKET_GLOSS_RE.sub(r"\1", text)
 
 
+def _strip_niqqud(word: str) -> str:
+    return _NIQQUD_RE.sub("", word)
+
+
 def _normalize_word(word: str) -> str:
-    word = _NIQQUD_RE.sub("", word)
+    word = _strip_niqqud(word)
     word = _QUOTE_RE.sub("", word)
     word = _PUNCT_RE.sub("", word)
     return word
+
+
+def _tokenize(text: str) -> list[str]:
+    return _expand_bracket_glosses(text).split()
 
 
 def normalize_words(text: str) -> list[str]:
@@ -52,8 +60,20 @@ def normalize_words(text: str) -> list[str]:
     text) as the source of matched_text handed to stage 3 -- a clean,
     quote-free string is exactly what CTC/uroman romanization needs
     anyway (a stray `"` character has previously crashed that stage)."""
-    text = _expand_bracket_glosses(text)
-    return [w for w in (_normalize_word(w) for w in text.split()) if w]
+    return [w for w in (_normalize_word(w) for w in _tokenize(text)) if w]
+
+
+def tokenize_with_display(text: str) -> tuple[list[str], list[str]]:
+    """Positionally-aligned (stripped, display) token pair from the same raw
+    split -- display[i] keeps quotes/punctuation (only niqqud stripped).
+    Unlike normalize_words, empty-after-stripping tokens are NOT dropped
+    here, so index i means the same token in both lists; callers needing
+    normalize_words-equivalent output must apply the same drop-empty mask
+    to both lists (see align_segments_to_text)."""
+    raw = _tokenize(text)
+    stripped = [_normalize_word(w) for w in raw]
+    display = [_strip_niqqud(w) for w in raw]
+    return stripped, display
 
 
 def match_segment_to_reference(
@@ -110,12 +130,20 @@ def align_segments_to_text(
 ) -> list[dict]:
     """Annotate each rough segment with its matched reference-text span.
 
-    Adds "ref_start", "ref_end", "matched_text", "match_ratio" to each
-    segment dict (ref_start is None when unmatched). The cursor only
-    advances on a successful match, so an unmatched segment does not throw
-    off the search window for the next one.
+    Adds "ref_start", "ref_end", "matched_text", "matched_display_words",
+    "match_ratio" to each segment dict (ref_start is None when unmatched).
+    matched_text is the stripped, CTC-safe string (as before); aligned to
+    it 1:1 by word position, matched_display_words restores quotes/
+    punctuation for final display -- CTC alignment itself never sees
+    punctuation. The cursor only advances on a successful match, so an
+    unmatched segment does not throw off the search window for the next
+    one.
     """
-    ref_words = normalize_words(reference_text)
+    ref_stripped_all, ref_display_all = tokenize_with_display(reference_text)
+    keep = [i for i, w in enumerate(ref_stripped_all) if w]
+    ref_words = [ref_stripped_all[i] for i in keep]  # == normalize_words(reference_text)
+    ref_display_words = [ref_display_all[i] for i in keep]  # 1:1 with ref_words
+
     cursor = 0
     matched = []
     for seg in segments:
@@ -124,7 +152,14 @@ def align_segments_to_text(
         )
         if result is None:
             matched.append(
-                {**seg, "ref_start": None, "ref_end": None, "matched_text": None, "match_ratio": 0.0}
+                {
+                    **seg,
+                    "ref_start": None,
+                    "ref_end": None,
+                    "matched_text": None,
+                    "matched_display_words": None,
+                    "match_ratio": 0.0,
+                }
             )
             continue
         ref_start, ref_end, ratio = result
@@ -134,6 +169,7 @@ def align_segments_to_text(
                 "ref_start": ref_start,
                 "ref_end": ref_end,
                 "matched_text": " ".join(ref_words[ref_start:ref_end]),
+                "matched_display_words": ref_display_words[ref_start:ref_end],
                 "match_ratio": ratio,
             }
         )

@@ -12,5 +12,7 @@
   "min_match_ratio": 0.4,
   "min_ctc_score": 0.5,
   "words_per_cue": 12,
+  "max_cue_gap_s": 3.0,
+  "max_cue_words": null,
   "debug": true
 }

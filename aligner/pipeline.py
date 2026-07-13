@@ -36,6 +36,8 @@ def run_pipeline(cfg: dict) -> dict:
     min_match_ratio = cfg.get("min_match_ratio", 0.4)
     min_ctc_score = cfg.get("min_ctc_score", 0.5)
     words_per_cue = cfg.get("words_per_cue", 12)
+    max_cue_gap_s = cfg.get("max_cue_gap_s", 3.0)
+    max_cue_words = cfg.get("max_cue_words")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     debug_dir = os.path.join(os.path.dirname(output_srt_path), "debug") if cfg.get("debug", False) else None
 
@@ -82,9 +84,11 @@ def run_pipeline(cfg: dict) -> dict:
         waveform = waveform.mean(dim=0, keepdim=True)
 
     all_words = []
+    skipped_windows = []
     n_failed = 0
     for m in matched:
         if m["ref_start"] is None:
+            skipped_windows.append({"start": m["start"], "end": m["end"], "reason": "unmatched"})
             continue
         start_sample = int(m["start"] * sr)
         end_sample = int(m["end"] * sr)
@@ -94,16 +98,31 @@ def run_pipeline(cfg: dict) -> dict:
         except Exception as e:
             print(f"  ! CTC alignment failed for window {m['start']:.1f}-{m['end']:.1f}s: {e}")
             n_failed += 1
+            skipped_windows.append(
+                {"start": m["start"], "end": m["end"], "reason": "ctc_failed", "detail": str(e)}
+            )
             continue
-        for w in words:
+        display_words = m["matched_display_words"]
+        assert len(words) == len(display_words), (
+            f"CTC word count ({len(words)}) != display word count ({len(display_words)}) "
+            "-- matched_text/matched_display_words should always stay 1:1 by construction"
+        )
+        for w, disp in zip(words, display_words):
             w["start"] += m["start"]
             w["end"] += m["start"]
+            w["display_word"] = disp
         all_words.extend(words)
 
     print(f"[4/4] Assembling SRT ({len(all_words)} aligned words, {n_failed} windows failed)")
-    cues, flagged = words_to_cues(all_words, words_per_cue=words_per_cue, min_score=min_ctc_score)
+    cues, flagged = words_to_cues(
+        all_words,
+        words_per_cue=words_per_cue,
+        min_score=min_ctc_score,
+        max_gap_s=max_cue_gap_s,
+        max_cue_words=max_cue_words,
+    )
     write_srt(cues, output_srt_path)
-    write_qc_report(flagged, output_qc_path)
+    write_qc_report(flagged, skipped_windows, output_qc_path)
     print(f"  -> {output_srt_path} ({len(cues)} cues, {len(flagged)} flagged for review)")
 
     return {
@@ -111,6 +130,7 @@ def run_pipeline(cfg: dict) -> dict:
         "matched_segments": len(matched) - n_unmatched,
         "unmatched_segments": n_unmatched,
         "ctc_failed_windows": n_failed,
+        "skipped_windows": len(skipped_windows),
         "aligned_words": len(all_words),
         "cues": len(cues),
         "flagged_cues": len(flagged),

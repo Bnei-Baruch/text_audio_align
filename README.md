@@ -188,11 +188,14 @@ python run_align.py align_config.json
 
 `run_align.py` batches over every subdirectory of `data_dir` (skipping any
 that don't contain exactly one `.wav` and a `reference_text.txt`), running
-the pipeline for each and writing to `<output_dir>/<unit_id>/`:
-`output.srt`, `output_qc.json` (every subtitle cue containing a word below
-`min_ctc_score`, default 0.5 — review these before trusting the file
-downstream), plus copies of the source audio and reference text so each
-unit's output directory is self-contained for review.
+the pipeline for each and writing to `<output_dir>/<unit_id>/`: `output.srt`
+and `output_qc.json` — `{"flagged_cues": [...], "skipped_windows": [...]}`,
+where `flagged_cues` lists every subtitle cue containing a word below
+`min_ctc_score` (default 0.5) and `skipped_windows` lists time ranges that
+were dropped entirely (unmatched against the reference text, or a CTC
+alignment failure) — review both before trusting the file downstream —
+plus copies of the source audio and reference text so each unit's output
+directory is self-contained for review.
 
 ## Config reference (`align_config.json`)
 
@@ -210,7 +213,9 @@ unit's output directory is self-contained for review.
 | `lookahead_words` | `200` | How far ahead of the cursor to search the reference text per segment. |
 | `min_match_ratio` | `0.4` | Below this text-match ratio, a segment is left unmatched (excluded from alignment). |
 | `min_ctc_score` | `0.5` | Below this CTC confidence, a cue is flagged in the QC report. |
-| `words_per_cue` | `12` | How many aligned words to group into one SRT cue. |
+| `words_per_cue` | `12` | Soft target cue length: cues break earlier at sentence-ending punctuation, or at clause-ending punctuation once this many words are reached, or (failing that) at `max_cue_words`. |
+| `max_cue_gap_s` | `3.0` | If the gap between two consecutive aligned words exceeds this, the cue always breaks there -- prevents a dropped/unmatched/CTC-failed window from being silently bridged into one cue spanning the gap. |
+| `max_cue_words` | `null` | Hard cap on cue length for long unpunctuated stretches; `null` falls back to `2 * words_per_cue`. |
 | `debug` | `false` | If `true`, saves each VAD-derived stage-1 chunk as its own WAV under `<output_dir>/<unit_id>/debug/`, plus `vad_chunks.json` there logging index/start/end/duration/text per chunk -- useful for spotting an oversized chunk (see `vad_chunk.py`) that produced a bad stage-3 CTC window. |
 
 ## Layout
