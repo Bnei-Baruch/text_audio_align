@@ -10,6 +10,7 @@
   "max_speech_duration_s": null,
   "lookahead_words": 200,
   "min_match_ratio": 0.4,
+  "abbreviation_dict_path": "abbreviations.json",
   "min_ctc_score": 0.5,
   "words_per_cue": 12,
   "max_cue_gap_s": 3.0,

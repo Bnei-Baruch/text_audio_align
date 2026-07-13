@@ -34,6 +34,14 @@ _QUOTE_RE = re.compile(r"[\"'׳״‘’“”]")
 _PUNCT_RE = re.compile(r"[,.;:!?()]")
 _BRACKET_GLOSS_RE = re.compile(r"\S+\s*\[([^\]]+)\]")
 
+# A Hebrew ראשי תיבות abbreviation always has a gershayim/quote mark between
+# two Hebrew letters (תו"מ, הקב"ה, שע"י, בעמ"נ...) -- that's the shape
+# _ABBREV_CANDIDATE_RE flags as "worth trying to auto-expand", checked
+# against the display token (quotes kept, niqqud stripped).
+_ABBREV_CANDIDATE_RE = re.compile(r"[א-ת][\"'׳״][א-ת]")
+_ANCHOR_LENGTHS = (6, 5, 4, 3, 2)
+_MAX_EXPANSION_GAP = 6
+
 
 def _expand_bracket_glosses(text: str) -> str:
     """Replace "old_spelling [modern_spelling]" with just "modern_spelling"."""
@@ -76,6 +84,126 @@ def tokenize_with_display(text: str) -> tuple[list[str], list[str]]:
     stripped = [_normalize_word(w) for w in raw]
     display = [_strip_niqqud(w) for w in raw]
     return stripped, display
+
+
+def _find_sublist_occurrences(haystack: list[str], needle: list[str]) -> list[int]:
+    """Start indices where `needle` occurs contiguously in `haystack`."""
+    if not needle:
+        return []
+    n = len(needle)
+    return [i for i in range(len(haystack) - n + 1) if haystack[i:i + n] == needle]
+
+
+def load_abbreviation_dict(path: str) -> dict[str, list[str]]:
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_abbreviation_dict(path: str, abbrev_dict: dict[str, list[str]]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(abbrev_dict, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def discover_abbreviation_expansions(
+    reference_text: str,
+    hyp_texts: list[str],
+    known_dict: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, list[str]], list[dict]]:
+    """Auto-detect how Hebrew ראשי תיבות abbreviations (תו"מ, הקב"ה, שע"י,
+    בעמ"נ, ...) in `reference_text` were actually read aloud, by cross-
+    referencing the ASR rough-transcript text (`hyp_texts`, in document
+    order) around each abbreviation occurrence.
+
+    Why this works: an abbreviation is a single reference token standing
+    in for words the reader speaks in full, which is exactly what breaks
+    match_segment_to_reference's word-for-word comparison -- badly enough
+    that the mismatched region can make SequenceMatcher latch onto a
+    distant, unrelated occurrence of a common word and drag matched_end
+    far past where the segment actually ends (confirmed live: a single
+    הקב"ה dragged one segment's matched_end 30 words into the next
+    segment's territory). Fixing it means learning what each abbreviation
+    was actually read as.
+
+    For each abbreviation-shaped reference token not already in
+    `known_dict`, this takes the words immediately before and after it as
+    "anchors" -- they should appear verbatim in the ASR text, since
+    abbreviations are the thing that breaks verbatim matching, not
+    ordinary words -- and searches for that anchor pair in the
+    concatenated hyp word stream. The hyp words found *between* a matching
+    anchor pair are the observed expansion. Anchors start at
+    _ANCHOR_LENGTHS[0] words and shrink, because the reference and spoken
+    text can diverge slightly even near an abbreviation (a synonym, a
+    tense change) without changing how the abbreviation itself was read;
+    a wide anchor missing a verbatim match doesn't mean the abbreviation
+    is unreadable, just that this particular anchor was too greedy.
+
+    Returns (new_entries, report) -- new_entries is only the newly
+    discovered {abbrev_token: [expansion_words]} pairs (the caller merges
+    them into known_dict and persists via save_abbreviation_dict).
+    report has one entry per abbreviation occurrence encountered
+    (discovered / ambiguous / no match), for debugging.
+    """
+    known_dict = known_dict or {}
+    ref_stripped_all, ref_display_all = tokenize_with_display(reference_text)
+    keep = [i for i, w in enumerate(ref_stripped_all) if w]
+    ref_words = [ref_stripped_all[i] for i in keep]
+    ref_display_words = [ref_display_all[i] for i in keep]
+
+    hyp_stream: list[str] = []
+    for t in hyp_texts:
+        hyp_stream.extend(normalize_words(t))
+
+    new_entries: dict[str, list[str]] = {}
+    report = []
+    for idx, (word, display) in enumerate(zip(ref_words, ref_display_words)):
+        if word in known_dict or word in new_entries:
+            continue
+        if not _ABBREV_CANDIDATE_RE.search(display):
+            continue
+
+        status, expansion, anchor_len_used = "no_match", None, None
+        for anchor_len in _ANCHOR_LENGTHS:
+            before_len = min(anchor_len, idx)
+            after_len = min(anchor_len, len(ref_words) - idx - 1)
+            if before_len == 0 or after_len == 0:
+                continue
+            anchor_before = ref_words[idx - before_len:idx]
+            anchor_after = ref_words[idx + 1:idx + 1 + after_len]
+            ends_before = [
+                i + before_len for i in _find_sublist_occurrences(hyp_stream, anchor_before)
+            ]
+            starts_after = _find_sublist_occurrences(hyp_stream, anchor_after)
+            candidates = {
+                tuple(hyp_stream[e1:p2])
+                for e1 in ends_before
+                for p2 in starts_after
+                if 0 <= p2 - e1 <= _MAX_EXPANSION_GAP
+            }
+            if not candidates:
+                continue  # anchors too strict at this length -- try shorter
+            anchor_len_used = anchor_len
+            if len(candidates) == 1:
+                status, expansion = "discovered", list(next(iter(candidates)))
+            else:
+                status = "ambiguous"
+            break
+
+        report.append(
+            {
+                "token": word,
+                "ref_index": idx,
+                "status": status,
+                "expansion": expansion,
+                "anchor_len": anchor_len_used,
+            }
+        )
+        if status == "discovered":
+            new_entries[word] = expansion
+
+    return new_entries, report
 
 
 def match_segment_to_reference(
@@ -155,6 +283,7 @@ def align_segments_to_text(
     lookahead_words: int = 200,
     min_match_ratio: float = 0.4,
     debug_dir: str | None = None,
+    abbrev_dict: dict[str, list[str]] | None = None,
 ) -> list[dict]:
     """Annotate each rough segment with its matched reference-text span.
 
@@ -171,11 +300,30 @@ def align_segments_to_text(
     (see match_segment_to_reference's mismatch_log) is written to
     debug_dir/text_match_mismatches.json, matching the debug-artifact
     convention rough_transcribe uses for debug_dir/vad_chunks.json.
+
+    `abbrev_dict` (see discover_abbreviation_expansions) maps a raw
+    abbreviation reference token to the words it should expand to before
+    matching -- e.g. "הקבה" -> ["הקדוש", "ברוך", "הוא"]. Each occurrence is
+    spliced into ref_words/ref_display_words in place, so match_ratio is
+    computed against what was actually said instead of against a single
+    token that can never word-for-word match its multi-word reading.
     """
     ref_stripped_all, ref_display_all = tokenize_with_display(reference_text)
     keep = [i for i, w in enumerate(ref_stripped_all) if w]
     ref_words = [ref_stripped_all[i] for i in keep]  # == normalize_words(reference_text)
     ref_display_words = [ref_display_all[i] for i in keep]  # 1:1 with ref_words
+
+    if abbrev_dict:
+        expanded_words, expanded_display = [], []
+        for w, d in zip(ref_words, ref_display_words):
+            expansion = abbrev_dict.get(w)
+            if expansion:
+                expanded_words.extend(expansion)
+                expanded_display.extend(expansion)
+            else:
+                expanded_words.append(w)
+                expanded_display.append(d)
+        ref_words, ref_display_words = expanded_words, expanded_display
 
     mismatch_log = [] if debug_dir else None
     cursor = 0

@@ -10,6 +10,7 @@ Unmatched segments (stage 2) are excluded from alignment rather than forced
 review it"; the unmatched count is reported so that decision is visible
 rather than silent.
 """
+import json
 import os
 
 import soundfile as sf
@@ -18,7 +19,12 @@ import torch
 from .ctc_align import align_window
 from .rough_transcribe import rough_transcribe
 from .srt_assemble import words_to_cues, write_qc_report, write_srt
-from .text_match import align_segments_to_text
+from .text_match import (
+    align_segments_to_text,
+    discover_abbreviation_expansions,
+    load_abbreviation_dict,
+    save_abbreviation_dict,
+)
 
 
 def run_pipeline(cfg: dict) -> dict:
@@ -38,6 +44,7 @@ def run_pipeline(cfg: dict) -> dict:
     words_per_cue = cfg.get("words_per_cue", 12)
     max_cue_gap_s = cfg.get("max_cue_gap_s", 3.0)
     max_cue_words = cfg.get("max_cue_words")
+    abbreviation_dict_path = cfg.get("abbreviation_dict_path", "abbreviations.json")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     debug_dir = os.path.join(os.path.dirname(output_srt_path), "debug") if cfg.get("debug", False) else None
 
@@ -60,8 +67,24 @@ def run_pipeline(cfg: dict) -> dict:
         print(f"  -> debug: VAD chunks + log saved to {debug_dir}")
 
     print("[2/4] Matching segments to reference text")
+    abbrev_dict = load_abbreviation_dict(abbreviation_dict_path)
+    new_abbrevs, abbrev_report = discover_abbreviation_expansions(
+        reference_text, [s["text"] for s in segments], abbrev_dict
+    )
+    if new_abbrevs:
+        abbrev_dict.update(new_abbrevs)
+        save_abbreviation_dict(abbreviation_dict_path, abbrev_dict)
+        print(
+            f"  -> discovered {len(new_abbrevs)} new abbreviation expansion(s) "
+            f"-> {abbreviation_dict_path} ({len(abbrev_dict)} total)"
+        )
+    if debug_dir and abbrev_report:
+        os.makedirs(debug_dir, exist_ok=True)
+        with open(os.path.join(debug_dir, "abbreviation_discovery.json"), "w", encoding="utf-8") as f:
+            json.dump(abbrev_report, f, ensure_ascii=False, indent=2)
+
     matched = align_segments_to_text(
-        segments, reference_text, lookahead_words, min_match_ratio, debug_dir=debug_dir
+        segments, reference_text, lookahead_words, min_match_ratio, debug_dir=debug_dir, abbrev_dict=abbrev_dict
     )
     n_unmatched = sum(1 for m in matched if m["ref_start"] is None)
     print(
