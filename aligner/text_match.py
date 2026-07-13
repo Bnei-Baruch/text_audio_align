@@ -24,6 +24,8 @@ word count as a total mismatch. The archival text convention of
 resolved to just the bracketed form, which is what's actually read aloud
 -- confirmed by comparing a real hypothesis/reference pair live.
 """
+import json
+import os
 import re
 from difflib import SequenceMatcher
 
@@ -82,6 +84,8 @@ def match_segment_to_reference(
     cursor: int,
     lookahead_words: int = 200,
     min_match_ratio: float = 0.4,
+    mismatch_log: list[dict] | None = None,
+    segment_context: dict | None = None,
 ) -> tuple[int, int, float] | None:
     """Find where `hyp_text` best matches within ref_words[cursor : cursor+lookahead_words].
 
@@ -90,19 +94,35 @@ def match_segment_to_reference(
 
     Returns (matched_start, matched_end, match_ratio) as indices into
     ref_words, or None if no sufficiently good match was found.
+
+    If `mismatch_log` is given, every failure path appends a diagnostic
+    dict to it (reason, cursor, hyp_text, and whatever ratio/window info
+    was computed before the decision to bail) merged with `segment_context`
+    -- otherwise that info (e.g. a low match_ratio) is computed then
+    silently discarded, leaving no trail for why a segment was rejected.
     """
+
+    def _log(reason: str, **extra) -> None:
+        if mismatch_log is not None:
+            mismatch_log.append(
+                {"reason": reason, "cursor": cursor, "hyp_text": hyp_text, **extra, **(segment_context or {})}
+            )
+
     hyp_words = normalize_words(hyp_text)
     if not hyp_words:
+        _log("empty_hyp_text")
         return None
 
     window_end = min(len(ref_words), cursor + lookahead_words)
     window = ref_words[cursor:window_end]
     if not window:
+        _log("empty_window")
         return None
 
     sm = SequenceMatcher(None, window, hyp_words, autojunk=False)
     blocks = [b for b in sm.get_matching_blocks() if b.size > 0]
     if not blocks:
+        _log("no_matching_blocks", hyp_word_count=len(hyp_words), window_preview=" ".join(window[:30]))
         return None
 
     # NOT sm.ratio(): that's 2*M / (len(window) + len(hyp_words)), which
@@ -114,6 +134,13 @@ def match_segment_to_reference(
     matched_word_count = sum(b.size for b in blocks)
     match_ratio = matched_word_count / len(hyp_words)
     if match_ratio < min_match_ratio:
+        _log(
+            "low_match_ratio",
+            hyp_word_count=len(hyp_words),
+            matched_word_count=matched_word_count,
+            match_ratio=round(match_ratio, 4),
+            window_preview=" ".join(window[:30]),
+        )
         return None
 
     first_block, last_block = blocks[0], blocks[-1]
@@ -127,6 +154,7 @@ def align_segments_to_text(
     reference_text: str,
     lookahead_words: int = 200,
     min_match_ratio: float = 0.4,
+    debug_dir: str | None = None,
 ) -> list[dict]:
     """Annotate each rough segment with its matched reference-text span.
 
@@ -138,17 +166,29 @@ def align_segments_to_text(
     punctuation. The cursor only advances on a successful match, so an
     unmatched segment does not throw off the search window for the next
     one.
+
+    If `debug_dir` is given, every unmatched segment's diagnostic info
+    (see match_segment_to_reference's mismatch_log) is written to
+    debug_dir/text_match_mismatches.json, matching the debug-artifact
+    convention rough_transcribe uses for debug_dir/vad_chunks.json.
     """
     ref_stripped_all, ref_display_all = tokenize_with_display(reference_text)
     keep = [i for i, w in enumerate(ref_stripped_all) if w]
     ref_words = [ref_stripped_all[i] for i in keep]  # == normalize_words(reference_text)
     ref_display_words = [ref_display_all[i] for i in keep]  # 1:1 with ref_words
 
+    mismatch_log = [] if debug_dir else None
     cursor = 0
     matched = []
-    for seg in segments:
+    for i, seg in enumerate(segments):
         result = match_segment_to_reference(
-            seg["text"], ref_words, cursor, lookahead_words, min_match_ratio
+            seg["text"],
+            ref_words,
+            cursor,
+            lookahead_words,
+            min_match_ratio,
+            mismatch_log=mismatch_log,
+            segment_context={"segment_index": i, "seg_start": seg.get("start"), "seg_end": seg.get("end")},
         )
         if result is None:
             matched.append(
@@ -174,4 +214,10 @@ def align_segments_to_text(
             }
         )
         cursor = ref_end
+
+    if debug_dir and mismatch_log:
+        os.makedirs(debug_dir, exist_ok=True)
+        with open(os.path.join(debug_dir, "text_match_mismatches.json"), "w", encoding="utf-8") as f:
+            json.dump(mismatch_log, f, ensure_ascii=False, indent=2)
+
     return matched

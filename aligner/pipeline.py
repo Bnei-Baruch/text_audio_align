@@ -60,12 +60,16 @@ def run_pipeline(cfg: dict) -> dict:
         print(f"  -> debug: VAD chunks + log saved to {debug_dir}")
 
     print("[2/4] Matching segments to reference text")
-    matched = align_segments_to_text(segments, reference_text, lookahead_words, min_match_ratio)
+    matched = align_segments_to_text(
+        segments, reference_text, lookahead_words, min_match_ratio, debug_dir=debug_dir
+    )
     n_unmatched = sum(1 for m in matched if m["ref_start"] is None)
     print(
         f"  -> {len(matched) - n_unmatched}/{len(matched)} segments matched "
         f"({n_unmatched} unmatched -- likely insertions or a data/ASR problem)"
     )
+    if debug_dir and n_unmatched:
+        print(f"  -> debug: mismatch log saved to {debug_dir}/text_match_mismatches.json")
 
     print("[3/4] CTC forced alignment per matched window")
     try:
