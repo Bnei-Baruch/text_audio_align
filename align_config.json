@@ -9,6 +9,7 @@
   "min_silence_duration_ms": 100,
   "max_speech_duration_s": null,
   "lookahead_words": 200,
+  "start_lookahead_words": 10,
   "min_match_ratio": 0.4,
   "abbreviation_dict_path": "abbreviations.json",
   "min_ctc_score": 0.5,

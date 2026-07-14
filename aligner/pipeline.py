@@ -39,6 +39,7 @@ def run_pipeline(cfg: dict) -> dict:
     min_silence_duration_ms = cfg.get("min_silence_duration_ms", 100)
     max_speech_duration_s = cfg.get("max_speech_duration_s")
     lookahead_words = cfg.get("lookahead_words", 200)
+    start_lookahead_words = cfg.get("start_lookahead_words")
     min_match_ratio = cfg.get("min_match_ratio", 0.4)
     min_ctc_score = cfg.get("min_ctc_score", 0.5)
     words_per_cue = cfg.get("words_per_cue", 12)
@@ -84,13 +85,20 @@ def run_pipeline(cfg: dict) -> dict:
             json.dump(abbrev_report, f, ensure_ascii=False, indent=2)
 
     matched = align_segments_to_text(
-        segments, reference_text, lookahead_words, min_match_ratio, debug_dir=debug_dir, abbrev_dict=abbrev_dict
+        segments, reference_text, lookahead_words, min_match_ratio, debug_dir=debug_dir, abbrev_dict=abbrev_dict,
+        start_lookahead_words=start_lookahead_words,
     )
     n_unmatched = sum(1 for m in matched if m["ref_start"] is None)
+    n_start_search = sum(1 for m in matched if m.get("matched_via") == "start_search")
     print(
         f"  -> {len(matched) - n_unmatched}/{len(matched)} segments matched "
         f"({n_unmatched} unmatched -- likely insertions or a data/ASR problem)"
     )
+    if n_start_search:
+        print(
+            f"  -> {n_start_search} segment(s) recovered via a full-text start search "
+            "(unread front matter longer than lookahead_words)"
+        )
     if debug_dir and n_unmatched:
         print(f"  -> debug: mismatch log saved to {debug_dir}/text_match_mismatches.json")
 

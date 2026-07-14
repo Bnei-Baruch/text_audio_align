@@ -385,6 +385,7 @@ def align_segments_to_text(
     min_match_ratio: float = 0.4,
     debug_dir: str | None = None,
     abbrev_dict: dict[str, list[str]] | None = None,
+    start_lookahead_words: int | None = None,
 ) -> list[dict]:
     """Annotate each rough segment with its matched reference-text span.
 
@@ -396,6 +397,23 @@ def align_segments_to_text(
     punctuation. The cursor only advances on a successful match, so an
     unmatched segment does not throw off the search window for the next
     one.
+
+    Reference texts often open with material that was never read aloud
+    (title page, foreword, dedication) -- if that front matter is longer
+    than `lookahead_words`, the first segment's real content falls outside
+    the normal search window and match_segment_to_reference always fails,
+    which would otherwise cascade: the cursor never leaves 0, so every
+    later segment repeats the same failing window too. To recover from
+    this without weakening the narrow/fast windowed search everywhere
+    else, any segment is retried with a much wider window -- bounded by
+    `start_lookahead_words` (None = search all remaining ref_words) --
+    for as long as no segment has yet matched (cursor still at 0). A
+    segment recovered this way is tagged "matched_via": "start_search" for
+    debugging; the wide match is discarded (treated as still unmatched) if
+    its span is more than 5x the hypothesis length, since a real reading
+    shouldn't need a span many times longer than what was actually said --
+    that's the signature of a spurious, scattered match rather than a
+    genuine relocation past front matter.
 
     If `debug_dir` is given, every unmatched segment's diagnostic info
     (see match_segment_to_reference's mismatch_log) is written to
@@ -447,17 +465,26 @@ def align_segments_to_text(
 
     mismatch_log = [] if debug_dir else None
     cursor = 0
+    cursor_established = False
     matched = []
     for i, seg in enumerate(segments):
+        segment_context = {"segment_index": i, "seg_start": seg.get("start"), "seg_end": seg.get("end")}
         result = match_segment_to_reference(
-            seg["text"],
-            ref_words,
-            cursor,
-            lookahead_words,
-            min_match_ratio,
-            mismatch_log=mismatch_log,
-            segment_context={"segment_index": i, "seg_start": seg.get("start"), "seg_end": seg.get("end")},
+            seg["text"], ref_words, cursor, lookahead_words, min_match_ratio,
+            mismatch_log=mismatch_log, segment_context=segment_context,
         )
+        matched_via = None
+        if result is None and not cursor_established:
+            wide_result = match_segment_to_reference(
+                seg["text"], ref_words, cursor, start_lookahead_words or len(ref_words), min_match_ratio,
+                mismatch_log=mismatch_log, segment_context=segment_context,
+            )
+            if wide_result is not None:
+                ref_start, ref_end, _ = wide_result
+                hyp_word_count = len(normalize_words(seg["text"]))
+                if ref_end - ref_start <= 5 * hyp_word_count:
+                    result = wide_result
+                    matched_via = "start_search"
         if result is None:
             matched.append(
                 {
@@ -471,17 +498,19 @@ def align_segments_to_text(
             )
             continue
         ref_start, ref_end, ratio = result
-        matched.append(
-            {
-                **seg,
-                "ref_start": ref_start,
-                "ref_end": ref_end,
-                "matched_text": " ".join(ref_words[ref_start:ref_end]),
-                "matched_display_words": ref_display_words[ref_start:ref_end],
-                "match_ratio": ratio,
-            }
-        )
+        entry = {
+            **seg,
+            "ref_start": ref_start,
+            "ref_end": ref_end,
+            "matched_text": " ".join(ref_words[ref_start:ref_end]),
+            "matched_display_words": ref_display_words[ref_start:ref_end],
+            "match_ratio": ratio,
+        }
+        if matched_via:
+            entry["matched_via"] = matched_via
+        matched.append(entry)
         cursor = ref_end
+        cursor_established = True
 
     if debug_dir and mismatch_log:
         os.makedirs(debug_dir, exist_ok=True)
