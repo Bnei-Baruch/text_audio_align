@@ -307,6 +307,32 @@ def _drop_unheard_paren_words(
     return out_words, out_display
 
 
+def _drop_unheard_numeral_words(
+    ref_words: list[str],
+    ref_display_words: list[str],
+    hyp_texts: list[str],
+) -> tuple[list[str], list[str]]:
+    """Drop purely-numeric reference tokens (paragraph/verse markers like
+    "228.") that never occur anywhere in the ASR transcript. A number may or
+    may not actually be read aloud -- unlike a gloss/parenthetical, there's no
+    syntactic marker for "this one probably wasn't", so every purely-numeric
+    token is checked the same way: kept if heard, dropped if not. This matters
+    because a surviving numeral crashes CTC alignment outright rather than
+    just costing match_ratio -- the MMS_FA tokenizer's vocabulary has no
+    entry for digit characters (confirmed live: matched_text starting with
+    "228" raised KeyError('2') from aligner/ctc_align.py's tok(roman_words)),
+    which drops that segment's entire audio window (up to ~30s) from the
+    output rather than just the one word."""
+    heard = _heard_words(hyp_texts)
+    out_words, out_display = [], []
+    for w, d in zip(ref_words, ref_display_words):
+        if w.isdigit() and w not in heard:
+            continue
+        out_words.append(w)
+        out_display.append(d)
+    return out_words, out_display
+
+
 def match_segment_to_reference(
     hyp_text: str,
     ref_words: list[str],
@@ -432,7 +458,12 @@ def align_segments_to_text(
     before matching (see _drop_unheard_gloss_words), and separately, so is
     a word from inside a (parenthetical aside) that's never heard (see
     _drop_unheard_paren_words) -- both are editorial guesses about what was
-    actually read, not a certainty.
+    actually read, not a certainty. A purely-numeric token (e.g. a "228."
+    paragraph marker) that's never heard is dropped the same way (see
+    _drop_unheard_numeral_words) -- a number may or may not be read aloud, but
+    one left in unheard doesn't just cost match_ratio like an ordinary
+    mismatched word would: it crashes CTC alignment and drops its whole
+    window.
     """
     ref_stripped_all, ref_display_all, ref_is_gloss_all, ref_is_paren_all = tokenize_with_display(reference_text)
     keep = [i for i, w in enumerate(ref_stripped_all) if w]
@@ -449,6 +480,10 @@ def align_segments_to_text(
     if any(ref_is_paren):
         ref_words, ref_display_words = _drop_unheard_paren_words(
             ref_words, ref_display_words, ref_is_paren, hyp_texts
+        )
+    if any(w.isdigit() for w in ref_words):
+        ref_words, ref_display_words = _drop_unheard_numeral_words(
+            ref_words, ref_display_words, hyp_texts
         )
 
     if abbrev_dict:
