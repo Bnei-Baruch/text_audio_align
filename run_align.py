@@ -78,6 +78,10 @@ def main() -> None:
             continue
         audio_path, text_path = found
 
+        if os.path.exists(os.path.join(output_dir, unit_id, "output.srt")):
+            print(f"[{unit_id}] skipping -- output.srt already exists")
+            continue
+
         print(f"=== {unit_id} ===")
         try:
             results[unit_id] = run_unit(unit_id, audio_path, text_path, base_cfg, output_dir)
