@@ -85,6 +85,9 @@ def main() -> None:
             print(f"[{unit_id}] failed: {e}")
 
     print(json.dumps(results, ensure_ascii=False, indent=2))
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":

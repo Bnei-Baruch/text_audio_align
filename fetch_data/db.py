@@ -37,6 +37,8 @@ INNER JOIN content_types ct ON ct.id = cu.type_id
 INNER JOIN files f ON f.content_unit_id = cu.id
 WHERE ct.name = %(cu_type)s
     AND f.type = %(file_type)s
+    AND f.language = 'he'
+    AND f.removed_at IS NULL
 ORDER BY cu.id
 OFFSET %(offset)s
 LIMIT %(limit)s
@@ -47,6 +49,7 @@ SELECT uid, language
 FROM files
 WHERE content_unit_id = %(cu_id)s
     AND type = 'text'
+    AND language = 'he'
     AND removed_at IS NULL
     AND (name ILIKE '%%.doc' OR name ILIKE '%%.docx')
 """

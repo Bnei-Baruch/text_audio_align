@@ -142,11 +142,22 @@ def run_pipeline(cfg: dict) -> dict:
             f"CTC word count ({len(words)}) != display word count ({len(display_words)}) "
             "-- matched_text/matched_display_words should always stay 1:1 by construction"
         )
+        window_words = []
         for w, disp in zip(words, display_words):
             w["start"] += m["start"]
             w["end"] += m["start"]
+            if disp is None:
+                # Continuation of an abbreviation expansion (see
+                # text_match.py's abbrev_dict handling): merge this
+                # sub-word's timing into the group's first word instead of
+                # displaying it separately, so the SRT shows the original
+                # abbreviation once, spanning the whole expansion's audio.
+                window_words[-1]["end"] = w["end"]
+                window_words[-1]["score"] = min(window_words[-1]["score"], w["score"])
+                continue
             w["display_word"] = disp
-        all_words.extend(words)
+            window_words.append(w)
+        all_words.extend(window_words)
 
     print(f"[4/4] Assembling SRT ({len(all_words)} aligned words, {n_failed} windows failed)")
     cues, flagged = words_to_cues(

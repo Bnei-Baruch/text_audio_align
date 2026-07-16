@@ -307,22 +307,42 @@ def _drop_unheard_paren_words(
     return out_words, out_display
 
 
+def _hebrew_number_words(n: int) -> list[str]:
+    """Convert an integer to its Hebrew cardinal reading, split into words --
+    e.g. 175 -> ["מאה", "שבעים", "וחמש"]. Used only to give CTC alignment a
+    real Hebrew string to align against for a numeral that's genuinely heard
+    in the audio: the MMS_FA tokenizer's vocabulary has no entry for digit
+    characters at all (confirmed live: tok(["228", ...]) raises KeyError('2')
+    from aligner/ctc_align.py's tok(roman_words)) -- a digit token can never
+    be CTC-aligned directly no matter what was actually said, heard or not."""
+    from num2words import num2words
+
+    return num2words(n, lang="he").split()
+
+
 def _drop_unheard_numeral_words(
     ref_words: list[str],
     ref_display_words: list[str],
     hyp_texts: list[str],
 ) -> tuple[list[str], list[str]]:
     """Drop purely-numeric reference tokens (paragraph/verse markers like
-    "228.") that never occur anywhere in the ASR transcript. A number may or
-    may not actually be read aloud -- unlike a gloss/parenthetical, there's no
-    syntactic marker for "this one probably wasn't", so every purely-numeric
-    token is checked the same way: kept if heard, dropped if not. This matters
-    because a surviving numeral crashes CTC alignment outright rather than
-    just costing match_ratio -- the MMS_FA tokenizer's vocabulary has no
-    entry for digit characters (confirmed live: matched_text starting with
-    "228" raised KeyError('2') from aligner/ctc_align.py's tok(roman_words)),
-    which drops that segment's entire audio window (up to ~30s) from the
-    output rather than just the one word."""
+    "228.") that never occur anywhere in the ASR transcript -- an editorial
+    marker that was never read aloud, same reasoning as gloss/paren.
+
+    This runs *before* the cursor-matching loop, unlike the Hebrew-reading
+    expansion below (see _expand_matched_numerals): a numeral that *is* heard
+    must be left as the literal digit for matching, not expanded here. Unlike
+    an abbreviation -- whose spoken form is exactly what discover_abbreviation_
+    expansions harvests from the ASR text, so the pre-match expansion already
+    matches the hypothesis verbatim -- Whisper transcribes a spoken number
+    back into digit form (its own inverse-text-normalization), not the Hebrew
+    words actually said. Expanding "175" to "מאה שבעים וחמש" before matching
+    would make it un-matchable against a hypothesis that still says "175"
+    (confirmed live: SequenceMatcher's first matching block then starts
+    *after* the numeral, silently excluding it from matched_text instead of
+    collapsing it) -- so position-matching must use the literal digit, and
+    only the resulting matched span gets its numerals expanded, per segment,
+    after a match is already found."""
     heard = _heard_words(hyp_texts)
     out_words, out_display = [], []
     for w, d in zip(ref_words, ref_display_words):
@@ -330,6 +350,31 @@ def _drop_unheard_numeral_words(
             continue
         out_words.append(w)
         out_display.append(d)
+    return out_words, out_display
+
+
+def _expand_matched_numerals(matched_words: list[str], matched_display_words: list[str]) -> tuple[list[str], list[str]]:
+    """Expand any purely-numeric word remaining in one segment's already-
+    matched text/display-words into its Hebrew cardinal reading, for CTC
+    only -- run per-segment, after match_segment_to_reference has already
+    located the span using the literal digit (see _drop_unheard_numeral_words
+    for why matching itself must not see the expansion). Every numeral
+    reaching this point survived matching, so it's known to be heard; the
+    digit itself still can't reach CTC (see _hebrew_number_words), so it's
+    replaced the same way an abbrev_dict expansion is: only the first
+    sub-word's display stays the original digit text, the rest are None so
+    pipeline.py's per-word loop merges them back into that one displayed
+    word."""
+    out_words, out_display = [], []
+    for w, d in zip(matched_words, matched_display_words):
+        if not w.isdigit():
+            out_words.append(w)
+            out_display.append(d)
+            continue
+        expansion = _hebrew_number_words(int(w))
+        out_words.extend(expansion)
+        out_display.append(d)
+        out_display.extend([None] * (len(expansion) - 1))
     return out_words, out_display
 
 
@@ -449,9 +494,14 @@ def align_segments_to_text(
     `abbrev_dict` (see discover_abbreviation_expansions) maps a raw
     abbreviation reference token to the words it should expand to before
     matching -- e.g. "הקבה" -> ["הקדוש", "ברוך", "הוא"]. Each occurrence is
-    spliced into ref_words/ref_display_words in place, so match_ratio is
+    spliced into ref_words in place, so match_ratio and CTC alignment are
     computed against what was actually said instead of against a single
-    token that can never word-for-word match its multi-word reading.
+    token that can never word-for-word match its multi-word reading. Display
+    is kept separate from this: only ref_display_words' first expansion
+    sub-word carries the original abbreviation text (e.g. "הקב\"ה"); the
+    rest are None, a sentinel pipeline.py uses to merge the expansion's
+    per-word CTC timings back into one displayed word spanning the whole
+    expansion -- the SRT should show what was printed, not what was spoken.
 
     A bracketed gloss word ("old_spelling [modern_spelling]") that never
     occurs anywhere in the segments' ASR text is dropped from the reference
@@ -459,11 +509,17 @@ def align_segments_to_text(
     a word from inside a (parenthetical aside) that's never heard (see
     _drop_unheard_paren_words) -- both are editorial guesses about what was
     actually read, not a certainty. A purely-numeric token (e.g. a "228."
-    paragraph marker) that's never heard is dropped the same way (see
-    _drop_unheard_numeral_words) -- a number may or may not be read aloud, but
-    one left in unheard doesn't just cost match_ratio like an ordinary
-    mismatched word would: it crashes CTC alignment and drops its whole
-    window.
+    paragraph marker) that's never heard anywhere is dropped before matching
+    the same way (see _drop_unheard_numeral_words); one that survives into a
+    segment's matched span (so it's known to be heard, just as a literal
+    digit -- unlike an abbreviation, Whisper transcribes a spoken number back
+    into digit form, not its actual Hebrew words) still can't be handed to
+    CTC as a digit (see _hebrew_number_words), so it's expanded to its Hebrew
+    cardinal reading there instead and collapsed back to the original digits
+    for display, same display mechanism as abbrev_dict above (see
+    _expand_matched_numerals). Left in unheard -or- un-expanded, a digit
+    token doesn't just cost match_ratio like an ordinary mismatched word
+    would: it crashes CTC alignment outright and drops its whole window.
     """
     ref_stripped_all, ref_display_all, ref_is_gloss_all, ref_is_paren_all = tokenize_with_display(reference_text)
     keep = [i for i, w in enumerate(ref_stripped_all) if w]
@@ -492,7 +548,12 @@ def align_segments_to_text(
             expansion = abbrev_dict.get(w)
             if expansion:
                 expanded_words.extend(expansion)
-                expanded_display.extend(expansion)
+                # Display keeps the original abbreviation as printed, not the
+                # spoken-out expansion -- only the first sub-word carries it;
+                # the rest are marked None so pipeline.py's per-word loop
+                # merges them back into that one displayed word (see below).
+                expanded_display.append(d)
+                expanded_display.extend([None] * (len(expansion) - 1))
             else:
                 expanded_words.append(w)
                 expanded_display.append(d)
@@ -533,12 +594,16 @@ def align_segments_to_text(
             )
             continue
         ref_start, ref_end, ratio = result
+        span_words = ref_words[ref_start:ref_end]
+        span_display = ref_display_words[ref_start:ref_end]
+        if any(w.isdigit() for w in span_words):
+            span_words, span_display = _expand_matched_numerals(span_words, span_display)
         entry = {
             **seg,
             "ref_start": ref_start,
             "ref_end": ref_end,
-            "matched_text": " ".join(ref_words[ref_start:ref_end]),
-            "matched_display_words": ref_display_words[ref_start:ref_end],
+            "matched_text": " ".join(span_words),
+            "matched_display_words": span_display,
             "match_ratio": ratio,
         }
         if matched_via:
